@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arenda-app
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: arenda-app
+  template:
+    metadata:
+      labels:
+        app: arenda-app
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret # Cекрет для скачивания образа 
+      containers:
+        - name: arenda-app
+          image: ghcr.io/sutorminart/arenda:latest 
+          ports:
+            - containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: MONGO_URI
+              # Внутри кластера база доступна по имени сервиса "mongodb"
+              value: "mongodb://mongodb-0.mongodb:27017/myDatabase" 
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: arenda-service
+  namespace: default
+spec:
+  selector:
+    app: arenda-app
+  ports:
+    - port: 80
+      targetPort: 3000

@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: arenda-tls
+  namespace: default
+spec:
+  secretName: arenda-tls-secret
+  dnsNames:
+    - xn--e1adiecfr5a5he.xn--p1ai  # куплюземлю.рф
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer

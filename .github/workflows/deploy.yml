@@ -1,0 +1,86 @@
+name: CI/CD Build and Deploy
+
+on:
+  push:
+    branches:
+      - feature/docker-migration  # Срабатывает при пуше в вашу ветку  
+      - main                      # И в main тоже (на будущее)
+
+env:
+  REGISTRY: ghcr.io
+  # image name будет автоматически взят из названия репозитория (например, sutorminart/arenda)
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 1. Сначала копируем папку k8s на сервер
+      - name: Copy k8s manifests to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 105
+          source: "k8s/*"      # Берем все из локальной папки k8s
+          target: "app-deploy" # Кладем в папку ~/app-deploy на сервере
+
+      # 2. Затем заходим по SSH и применяем их
+      - name: Deploy to K3s via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 105
+          script: |
+            # Явно указываем, где лежит наш конфиг (чтобы не было permission denied)
+            export KUBECONFIG=~/.kube/config
+            
+            # Применяем issuer (нужно сделать один раз, но пусть будет тут)
+            kubectl apply -f ~/app-deploy/k8s/issuer.yaml
+
+            # Применяем манифесты, которые мы только что скопировали (шаг scp)
+            # Обратите внимание: scp копирует в папку app-deploy/k8s
+            kubectl apply -f ~/app-deploy/k8s/
+            
+            # Перезапускаем приложение
+            kubectl rollout restart deployment arenda-app

@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: arenda-ingress
+  namespace: default
+spec:
+  tls:
+    - hosts:
+        - xn--e1adiecfr5a5he.xn--p1ai
+      secretName: arenda-tls-secret # Куда сохранить сертификат (создастся сам)
+  rules:
+    - host: xn--e1adiecfr5a5he.xn--p1ai
+      http: 
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: arenda-service
+                port:
+                  number: 80

@@ -1,0 +1,31 @@
+# Зависимости (установим их заново внутри контейнера)
+node_modules
+
+# Git
+.git
+.gitignore
+
+# Локальные настройки и секреты
+.env
+.env.*
+
+# бэкапы и мусорные файлы
+*.md
+*.docx
+*.bat
+*.txt
+*.backup
+Thumbs.db
+dist
+mongo_data
+src/instruction_images
+
+# Исключаем старые бэкапы и лишние html, если они не нужны для продакшена
+*_backup.html
+index_*.html
+!index.html
+
+# ssl ключи
+ssl/
+server.key
+server.cert
