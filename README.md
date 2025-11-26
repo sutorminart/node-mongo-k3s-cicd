@@ -5,6 +5,7 @@
 ![GitHub Actions](https://img.shields.io/badge/github%20actions-%232671E5.svg?style=for-the-badge&logo=githubactions&logoColor=white)
 ![NodeJS](https://img.shields.io/badge/node.js-6DA55F?style=for-the-badge&logo=node.js&logoColor=white)
 ![MongoDB](https://img.shields.io/badge/MongoDB-%234ea94b.svg?style=for-the-badge&logo=mongodb&logoColor=white)
+![Helm](https://img.shields.io/badge/HELM-0F1689?style=for-the-badge&logo=helm&logoColor=white)
 
 Этот репозиторий содержит набор Kubernetes манифестов, Dockerfile для сборки образа и конфигурацию CI/CD пайплайна.
 
@@ -15,6 +16,7 @@
 * **App:** Node.js, Express, MongoDB (Mongoose).
 * **Infrastructure:** Ubuntu Server 24.04 (Bare-metal).
 * **Orchestration:** Kubernetes (K3s).
+* **Package Manager:** **Helm v3** (Управление релизами, шаблонизация).
 * **Networking:** Traefik Ingress Controller.
 * **Security:** Cert-Manager + Let's Encrypt (Auto HTTPS).
 * **CI/CD:** GitHub Actions + GHCR (Container Registry).
@@ -30,9 +32,11 @@ graph LR
     Registry --> SSH[SSH Deploy to Server]
     
     subgraph Server [Ubuntu 24.04 / K3s Cluster]
-        SSH --> Apply[Kubectl Apply]
+        SSH --> Helm[Helm Upgrade --atomic]
+        Helm -- Release vX --> App[Deployment: Node.js]
+        
         Internet --> Ingress[Traefik Ingress]
-        Ingress -- HTTPS --> App[Deployment: Node.js]
+        Ingress -- HTTPS --> App
         App --> DB[(StatefulSet: MongoDB)]
         
         DNS[CoreDNS Custom] -.-> App
@@ -47,49 +51,45 @@ graph LR
 * Использует `.dockerignore` для исключения мусорных файлов, секретов и локальных зависимостей.
 * Поддерживает многоэтапную сборку (build stage) для фронтенда.
 
-### 2. Легковесный Kubernetes (K3s)
-Развертывание на сервере Ubuntu 24.04 с использованием трех основных компонентов:
-* **MongoDB (`k8s/mongodb.yaml`):** Использование `StatefulSet` с Persistent Volume Claim (PVC) для надежного хранения данных базы.
-* **Приложение (`k8s/app.yaml`):** `Deployment` для Node.js приложения, работающего через переменные окружения.
-* **Ingress (`k8s/ingress.yaml`):** Настройка внешнего доступа через Traefik Ingress Controller.
+### 2. Helm Chart (Пакетирование)
+Вместо разрозненных YAML-манифестов используется структура Helm Chart (`charts/arenda`):
+* **Единая точка настройки:** Все параметры (порты, ресурсы, версии) вынесены в `values.yaml`.
+* **Гибкость:** Шаблонизация позволяет легко менять переменные окружения и настройки Ingress под разные окружения.
+* **Probes:** Настроены `livenessProbe` и `readinessProbe` для мониторинга здоровья подов, что гарантирует автоматический перезапуск зависших контейнеров.
 
 ### 3. CI/CD (GitHub Actions)
 В рамках адаптации выполнен рефакторинг `server.js` для работы с переменными окружения (например, `MONGO_URI`). Реализован файл `.github/workflows/deploy.yml`, который:
-* **Автоматизирует процесс:** Push в GitHub -> Сборка Docker -> Деплой на сервер.
-* **Использует Registry:** Публикация образов в GitHub Container Registry (GHCR).
-* **Безопасность:** Использование GitHub Secrets (`HOST`, `USERNAME`, `SSH_KEY`) для доступа к серверу.
+* **Build:** Собирает образ и пушит его в GHCR с уникальным тегом (SHA коммита).
+* **Deploy:** Заходит на сервер по SSH и выполняет helm upgrade.
+* **Atomic:** Использует флаг --atomic. Если приложение не пройдет проверки здоровья за 5 минут, Helm автоматически откатит релиз назад.
 
 ## 🔥 Ключевые решения и Челленджи
 
-### 1. Переход на Kubernetes (K3s)
-Приложение мигрировано с ручного запуска (`pm2`) в кластер.
-* **База данных:** MongoDB перенесена в `StatefulSet` для сохранения состояния.
-* **Связь:** Настроена внутренняя сеть K8s, приложение обращается к базе по стабильному DNS-имени `mongodb-0.mongodb`.
+### 1. Продвинутый GitOps с Helm
+Переход на пакетный менеджер позволил реализовать:
+* **Версионирование релизов:** Каждое обновление создает новую ревизию в истории Helm.
+* **Идемпотентность:** Использование динамических тегов (`sha-xxxx`) вместо `latest` гарантирует, что кластер всегда обновляется на свежий код.
+* **Zero Downtime:** Благодаря `readinessProbe`, трафик переключается на новые поды только после их полной готовности, исключая 503 ошибки для пользователей во время деплоя.
 
-### 2. Реализация GitOps Пайплайна
-* При пуше в ветку `feature/*` или `main` запускается сборка.
-* Манифесты Kubernetes копируются на сервер через SCP.
-* Изменения применяются через `kubectl apply`, и происходит бесшовный перезапуск подов (`rollout restart`).
+### 2. Надежная База Данных
+MongoDB работает в режиме `StatefulSet` с Persistent Volume Claim (PVC). Это гарантирует, что при пересоздании подов или обновлении Helm данные (диск) остаются в безопасности и корректно переподключаются к новому процессу базы данных.
 
 ### 3. Решение проблемы Hairpin NAT
-Сервер находится за NAT-роутером, который не поддерживает "петлевые" запросы, что блокировало самопроверку **Let's Encrypt**.
-* **Решение:** Настройка `CoreDNS` внутри кластера (NodeHosts), чтобы домен разрешался во внутренний IP (`192.168.x.x`), минуя роутер.
+Сервер находится за NAT-роутером, который не поддерживает "петлевые" запросы (обращение к самому себе по внешнему IP).
+* **Решение:** Настройка `CoreDNS` внутри кластера, чтобы домен разрешался во внутренний IP (`192.168.x.x`). Это критично для прохождения HTTP-валидации сертификатов Let's Encrypt.
 
 ### 4. Поддержка кириллических доменов (.РФ)
 Настроен Ingress и сертификаты для работы с IDN (Internationalized Domain Names) через Punycode (`xn--...`), что позволило корректно подключить домен **куплюземлю.рф** и выпустить для него SSL сертификат.
 
 ## 🚀 Как запустить (Деплой)
 
-1.  Внесите изменения в код приложения.
-2.  Сделайте коммит и пуш в ветку:
+Процесс полностью автоматизирован:
+
+1.  Внесите изменения в код приложения или настройки Helm (`values.yaml`).
+2.  Сделайте коммит и пуш в репозиторий:
     ```bash
     git add .
-    git commit -m "Feature: обновление логики"
+    git commit -m "feat: upgrade app logic"
     git push origin main
     ```
-3.  Перейдите во вкладку **Actions** на GitHub и следите за пайплайном:
-    * **Build and Push:** Сборка и отправка в GHCR.
-    * **Deploy:** Обновление манифестов на сервере.
-
-После завершения (зеленая галочка) приложение обновится автоматически без простоя (Zero Downtime).
-
+3.  Перейдите во вкладку **Actions** на GitHub. Пайплайн соберет новый образ, доставит чарт на сервер и безопасно обновит приложение.

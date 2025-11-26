@@ -1,0 +1,20 @@
+# Настройки приложения
+app:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/sutorminart/arenda
+    tag: "latest"
+  pullSecret: ghcr-secret 
+  port: 3000
+
+# Настройки MongoDB
+mongodb:
+  image: mongo:5.0
+  storageSize: 10Gi
+  uri: "mongodb://mongodb-0.mongodb:27017/myDatabase"
+
+# Настройки домена и Ingress
+ingress:
+  enabled: true
+  host: xn--e1adiecfr5a5he.xn--p1ai 
+  issuer: letsencrypt-prod

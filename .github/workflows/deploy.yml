@@ -3,12 +3,11 @@ name: CI/CD Build and Deploy
 on:
   push:
     branches:
-      - feature/docker-migration  # Срабатывает при пуше в вашу ветку  
-      - main                      # И в main тоже (на будущее)
+      - main
+      - feature/*
 
 env:
   REGISTRY: ghcr.io
-  # image name будет автоматически взят из названия репозитория (например, sutorminart/arenda)
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -29,6 +28,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Генерируем теги.
+      # type=sha создаст тег вида: sha-8a2b3c1 (короткий хэш коммита)
+      # type=raw создаст тег: latest
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v4
@@ -36,6 +38,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
+            type=sha
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
@@ -52,35 +55,42 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # 1. Сначала копируем папку k8s на сервер
-      - name: Copy k8s manifests to server
+      # 1. Копируем папку с чартом на сервер (чтобы обновились конфиги, если вы их меняли)
+      # Мы НЕ копируем старую папку k8s/, только my-chart/
+      - name: Copy Helm Chart to server
         uses: appleboy/scp-action@master
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
           port: 105
-          source: "k8s/*"      # Берем все из локальной папки k8s
-          target: "app-deploy" # Кладем в папку ~/app-deploy на сервере
+          source: "my-chart/*"
+          target: "app-deploy" # На сервере появится ~/app-deploy/my-chart
 
-      # 2. Затем заходим по SSH и применяем их
-      - name: Deploy to K3s via SSH
+      # 2. Заходим по SSH и обновляем релиз через Helm
+      - name: Deploy via Helm
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
-          port: 105
+          port: 105 
+          # Передаем полный хэш коммита, чтобы внутри скрипта его обрезать
+          envs: GITHUB_SHA
           script: |
-            # Явно указываем, где лежит наш конфиг (чтобы не было permission denied)
             export KUBECONFIG=~/.kube/config
             
-            # Применяем issuer (нужно сделать один раз, но пусть будет тут)
-            kubectl apply -f ~/app-deploy/k8s/issuer.yaml
-
-            # Применяем манифесты, которые мы только что скопировали (шаг scp)
-            # Обратите внимание: scp копирует в папку app-deploy/k8s
-            kubectl apply -f ~/app-deploy/k8s/
+            # Формируем тот же тег, который создал Docker Metadata (sha + 7 символов коммита)
+            # GitHub передает полный SHA, мы его обрезаем до 7 символов
+            SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+            IMAGE_TAG="sha-$SHORT_SHA"
             
-            # Перезапускаем приложение
-            kubectl rollout restart deployment arenda-app
+            echo "Deploying version: $IMAGE_TAG"
+
+            # Helm Upgrade
+            # --set app.image.tag=$IMAGE_TAG -> подменяет версию образа на лету
+            # --atomic -> если приложение не запустится, Helm сам откатит изменения назад!
+            helm upgrade --install arenda ~/app-deploy/my-chart \
+              --set app.image.tag=$IMAGE_TAG \
+              --atomic \
+              --timeout 5m
