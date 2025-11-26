@@ -1,0 +1,13 @@
+# infra/monitoring-values.yaml
+grafana:
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    annotations:
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    hosts:
+      - grafana.xn--e1adiecfr5a5he.xn--p1ai
+    tls:
+      - secretName: grafana-tls-secret
+        hosts:
+          - grafana.xn--e1adiecfr5a5he.xn--p1ai
